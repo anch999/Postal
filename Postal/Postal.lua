@@ -1,6 +1,7 @@
 ﻿local Postal = LibStub("AceAddon-3.0"):NewAddon("Postal", "AceEvent-3.0", "AceHook-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("Postal")
 _G["Postal"] = Postal
+local TOC = select(4, GetBuildInfo())
 
 -- defaults for storage
 local defaults = {
@@ -9,9 +10,11 @@ local defaults = {
 			["*"] = true
 		},
 		OpenSpeed = 0.50,
+		ChatOutput = 1,
 		Select = {
 			SpamChat = true,
 			KeepFreeSpace = 1,
+			UseMrPlow = true,
 		},
 		OpenAll = {
 			AHCancelled = true,
@@ -19,18 +22,16 @@ local defaults = {
 			AHOutbid = true,
 			AHSuccess = true,
 			AHWon = true,
-			NeutralAHCancelled = true,
-			NeutralAHExpired = true,
-			NeutralAHOutbid = true,
-			NeutralAHSuccess = true,
-			NeutralAHWon = true,
+			AHPending = true,
 			Attachments = true,
 			SpamChat = true,
 			KeepFreeSpace = 1,
+			UseMrPlow = true,
 		},
 		Express = {
 			EnableAltClick = true,
 			AutoSend = true,
+			BulkSend = true,
 			MouseWheel = true,
 			MultiItemTooltip = true,
 		},
@@ -39,6 +40,7 @@ local defaults = {
 			contacts = {},
 			recent = {},
 			AutoCompleteAlts = true,
+			AutoCompleteAllAlts = true,
 			AutoCompleteRecent = true,
 			AutoCompleteContacts = true,
 			AutoCompleteFriends = true,
@@ -56,7 +58,6 @@ local defaults = {
 }
 local _G = getfenv(0)
 local t = {}
-local aboutFrame
 Postal.keepFreeOptions = {0, 1, 2, 3, 5, 10, 15, 20, 25, 30}
 
 -- Use a common frame and setup some common functions for the Postal dropdown menus
@@ -66,6 +67,9 @@ Postal_DropDownMenu.info = {}
 Postal_DropDownMenu.levelAdjust = 0
 Postal_DropDownMenu.UncheckHack = function(dropdownbutton)
 	_G[dropdownbutton:GetName().."Check"]:Hide()
+	if TOC >= 40000 then
+		_G[dropdownbutton:GetName().."UnCheck"]:Hide()
+	end
 end
 Postal_DropDownMenu.HideMenu = function()
 	if UIDROPDOWNMENU_OPEN_MENU == Postal_DropDownMenu then
@@ -102,7 +106,7 @@ function Postal:OnInitialize()
 	self.db.RegisterCallback(self, "OnProfileReset", "OnProfileChanged")
 
 	-- Enable/disable modules based on saved settings
-	for name, module in self:IterateModules() do 
+	for name, module in self:IterateModules() do
 		module:SetEnabledState(self.db.profile.ModuleEnabledState[name] or false)
 		if module.OnEnable then
 			hooksecurefunc(module, "OnEnable", self.OnModuleEnable_Common) -- Posthook
@@ -139,14 +143,11 @@ function Postal:OnInitialize()
 		b:SetScript("OnLeave", subjectHoverOut)
 	end
 
-	-- To fix Blizzard's bug caused by the new "self:SetFrameLevel(2);"
-	hooksecurefunc("UIDropDownMenu_CreateFrames", Postal.FixMenuFrameLevels)
-
 	self.OnInitialize = nil
 end
 
 function Postal:OnProfileChanged(event, database, newProfileKey)
-	for name, module in self:IterateModules() do 
+	for name, module in self:IterateModules() do
 		if self.db.profile.ModuleEnabledState[name] then
 			module:Enable()
 		else
@@ -177,7 +178,25 @@ function Postal:Print(...)
 	for i = 1, select("#", ...) do
 		text = text.." "..tostring(select(i, ...))
 	end
-	print(text)
+
+	if not self:IsChatFrameActive(self.db.profile.ChatOutput) then
+		self.db.profile.ChatOutput = 1
+	end
+	local chatFrame = _G["ChatFrame"..self.db.profile.ChatOutput]
+	if chatFrame then
+		chatFrame:AddMessage(text)
+	end
+end
+
+function Postal:IsChatFrameActive(i)
+	local _, _, _, _, _, _, shown = FCF_GetChatWindowInfo(i);
+	local chatFrame = _G["ChatFrame"..i]
+	if chatFrame then
+		if shown or chatFrame.isDocked then
+			return true
+		end
+	end
+	return false
 end
 
 function Postal.SaveOption(dropdownbutton, arg1, arg2, checked)
@@ -191,6 +210,10 @@ end
 
 function Postal.SetOpenSpeed(dropdownbutton, arg1, arg2, checked)
 	Postal.db.profile.OpenSpeed = arg1
+end
+
+function Postal.SetChatOutput(dropdownbutton, arg1, arg2, checked)
+	Postal.db.profile.ChatOutput = arg1
 end
 
 function Postal.ProfileFunc(dropdownbutton, arg1, arg2, checked)
@@ -208,21 +231,35 @@ StaticPopupDialogs["POSTAL_NEW_PROFILE"] = {
 	button2 = CANCEL,
 	hasEditBox = 1,
 	maxLetters = 128,
-	hasWideEditBox = 1,
+	hasWideEditBox = 1,  -- Not needed in Cata
+	editBoxWidth = 350,  -- Needed in Cata
 	OnAccept = function(self)
-		Postal.db:SetProfile(strtrim(self.wideEditBox:GetText()))
+		if TOC < 40000 then
+			Postal.db:SetProfile(strtrim(self.wideEditBox:GetText()))
+		else
+			Postal.db:SetProfile(strtrim(self.editBox:GetText()))
+		end
 	end,
 	OnShow = function(self)
-		self.wideEditBox:SetText(Postal.db:GetCurrentProfile())
-		self.wideEditBox:SetFocus()
+		if TOC < 40000 then
+			self.wideEditBox:SetText(Postal.db:GetCurrentProfile())
+			self.wideEditBox:SetFocus()
+		else
+			self.editBox:SetText(Postal.db:GetCurrentProfile())
+			self.editBox:SetFocus()
+		end
 	end,
-	OnHide = StaticPopupDialogs["SET_GUILDMOTD"].OnHide,
+	OnHide = StaticPopupDialogs[TOC < 40000 and "SET_GUILDMOTD" or "SET_GUILDPLAYERNOTE"].OnHide,
 	EditBoxOnEnterPressed = function(self)
 		local parent = self:GetParent()
-		Postal.db:SetProfile(strtrim(parent.wideEditBox:GetText()))
+		if TOC < 40000 then
+			Postal.db:SetProfile(strtrim(parent.wideEditBox:GetText()))
+		else
+			Postal.db:SetProfile(strtrim(parent.editBox:GetText()))
+		end
 		parent:Hide()
 	end,
-	EditBoxOnEscapePressed = StaticPopupDialogs["SET_GUILDMOTD"].EditBoxOnEscapePressed,
+	EditBoxOnEscapePressed = StaticPopupDialogs[TOC < 40000 and "SET_GUILDMOTD" or "SET_GUILDPLAYERNOTE"].EditBoxOnEscapePressed,
 	timeout = 0,
 	exclusive = 1,
 	whileDead = 1,
@@ -244,7 +281,8 @@ function Postal.Menu(self, level)
 		info.notCheckable = nil
 
 		info.keepShownOnClick = 1
-		for name, module in Postal:IterateModules() do 
+		info.isNotRadio = 1
+		for name, module in Postal:IterateModules() do
 			info.text = L[name]
 			info.func = Postal.ToggleModule
 			info.arg1 = name
@@ -266,6 +304,14 @@ function Postal.Menu(self, level)
 		info.keepShownOnClick = 1
 		info.hasArrow = 1
 		info.value = "OpenSpeed"
+		UIDropDownMenu_AddButton(info, level)
+
+		info.text = L["Chat Output"]
+		info.func = self.UncheckHack
+		info.notCheckable = 1
+		info.keepShownOnClick = 1
+		info.hasArrow = 1
+		info.value = "ChatOutput"
 		UIDropDownMenu_AddButton(info, level)
 
 		info.text = L["Profile"]
@@ -310,6 +356,18 @@ function Postal.Menu(self, level)
 				UIDropDownMenu_AddButton(info, level)
 			end
 
+		elseif UIDROPDOWNMENU_MENU_VALUE == "ChatOutput" then
+			local selectedFrame = Postal.db.profile.ChatOutput
+			for i = 1, NUM_CHAT_WINDOWS do
+				if Postal:IsChatFrameActive(i) then
+					info.text = format("%d. %s", i, _G["ChatFrame"..i.."Tab"]:GetText())
+					info.func = Postal.SetChatOutput
+					info.checked = i == selectedFrame
+					info.arg1 = i
+					UIDropDownMenu_AddButton(info, level)
+				end
+			end
+
 		elseif UIDROPDOWNMENU_MENU_VALUE == "Profile" then
 			-- Profile stuff
 			info.hasArrow = 1
@@ -341,7 +399,7 @@ function Postal.Menu(self, level)
 			info.arg1 = "ResetProfile"
 			info.arg2 = nil
 			UIDropDownMenu_AddButton(info, level)
-			
+
 		elseif type(UIDROPDOWNMENU_MENU_VALUE) == "table" and UIDROPDOWNMENU_MENU_VALUE.ModuleMenu then
 			-- Submenus for modules
 			self.levelAdjust = 1
@@ -398,6 +456,7 @@ function Postal.Menu(self, level)
 end
 
 function Postal:CreateAboutFrame()
+	local aboutFrame = Postal.aboutFrame
 	if not aboutFrame and Chatter and ChatterCopyFrame then
 		aboutFrame = ChatterCopyFrame
 		aboutFrame.editBox = Chatter:GetModule("Chat Copy").editBox
@@ -417,6 +476,7 @@ function Postal:CreateAboutFrame()
 		aboutFrame:SetPoint("CENTER", UIParent, "CENTER")
 		aboutFrame:Hide()
 		aboutFrame:SetFrameStrata("DIALOG")
+		aboutFrame:SetToplevel(true)
 
 		local scrollArea = CreateFrame("ScrollFrame", "PostalAboutScroll", aboutFrame, "UIPanelScrollFrameTemplate")
 		scrollArea:SetPoint("TOPLEFT", aboutFrame, "TOPLEFT", 8, -30)
@@ -438,6 +498,7 @@ function Postal:CreateAboutFrame()
 		local close = CreateFrame("Button", nil, aboutFrame, "UIPanelCloseButton")
 		close:SetPoint("TOPRIGHT", aboutFrame, "TOPRIGHT")
 	end
+	Postal.aboutFrame = aboutFrame
 	Postal.CreateAboutFrame = nil -- Kill ourselves
 end
 
@@ -462,27 +523,11 @@ function Postal.About()
 	tinsert(t, "-----")
 	tinsert(t, L["Please post bugs or suggestions at the wowace forums thread at |cFF00FFFFhttp://forums.wowace.com/showthread.php?t=3909|r. When posting bugs, indicate your locale and Postal's version number v%s."]:format(version))
 	tinsert(t, "")
-	tinsert(t, "- Xinhuan (Blackrock US Alliance)")
+	tinsert(t, "- Xinhuan (Blackrock/Barthilas US Alliance)")
 	tinsert(t, "")
-	aboutFrame.editBox:SetText(table.concat(t, "\n"))
-	aboutFrame:Show()
+	Postal.aboutFrame.editBox:SetText(table.concat(t, "\n"))
+	Postal.aboutFrame:Show()
 	wipe(t) -- For garbage collection
-end
-
--- To fix Blizzard's bug caused by the new "self:SetFrameLevel(2);"
-local function FixFrameLevel(level, ...)
-	for i = 1, select("#", ...) do
-		local button = select(i, ...)
-		button:SetFrameLevel(level)
-	end
-end
-function Postal.FixMenuFrameLevels()
-	for i = 1, 3 do
-		local f = _G["DropDownList"..i]
-		if f then
-			FixFrameLevel(f:GetFrameLevel() + 2, f:GetChildren())
-		end
-	end
 end
 
 ---------------------------
@@ -516,6 +561,7 @@ local SubjectPatterns = {
 	AHOutbid = gsub(AUCTION_OUTBID_MAIL_SUBJECT, "%%s", ".*"),
 	AHSuccess = gsub(AUCTION_SOLD_MAIL_SUBJECT, "%%s", ".*"),
 	AHWon = gsub(AUCTION_WON_MAIL_SUBJECT, "%%s", ".*"),
+	AHPending = gsub(AUCTION_INVOICE_MAIL_SUBJECT, "%%s", ".*"),
 }
 function Postal:GetMailType(msgSubject)
 	if msgSubject then

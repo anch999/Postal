@@ -8,8 +8,9 @@ Postal_OpenAll.description2 = L[ [[|cFFFFCC00*|r Simple filters are available fo
 |cFFFFCC00*|r OpenAll will skip CoD mails and mails from Blizzard.
 |cFFFFCC00*|r Disable the Verbose option to stop the chat spam while opening mail.]] ]
 
+local MAX_MAIL_SHOWN = 50
 local mailIndex, attachIndex
-local origNumItems, origTotalItems
+local numUnshownItems
 local lastItem, lastNumAttach, lastNumGold
 local wait
 local button
@@ -17,6 +18,7 @@ local Postal_OpenAllMenuButton
 local skipFlag
 local invFull, invAlmostFull
 local openAllOverride
+local firstMailDaysLeft
 
 -- Frame to process opening mail
 local updateFrame = CreateFrame("Frame")
@@ -40,34 +42,40 @@ end)
 
 -- Frame to refresh the Inbox
 -- I'm cheap so instead of trying to track 60 or so seconds since the
--- last CheckInbox(), I just call CheckInbox() every 5 seconds
+-- last CheckInbox(), I just call CheckInbox() every 10 seconds
 local refreshFrame = CreateFrame("Frame", nil, MailFrame)
 refreshFrame:Hide()
 refreshFrame:SetScript("OnShow", function(self)
-	self.time = 5
+	self.time = 1
 	self.mode = nil
 end)
 refreshFrame:SetScript("OnUpdate", function(self, elapsed)
-	self.time = self.time - elapsed -- CurrentTime - (continuously updated elapsed)
-	if self.time <= 0 then -- If elapsed becomes too big then
+	self.time = self.time - elapsed
+	if self.time <= 0 then
 		if self.mode == nil then
-			self.time = 5 -- sets current time + 5
+			self.time = 1
 			Postal:Print(L["Refreshing mailbox..."])
+			self:RegisterEvent("MAIL_INBOX_UPDATE")
 			CheckInbox()
-			local current, total = GetInboxNumItems()
-			if current == 50 or current == total then
-				-- If we're here, then mailbox contains a full fresh 50 or
-				-- we're showing all the mail we have. Continue OpenAll in
-				-- 1 second(s) to allow for other addons to do stuff.
-				self.time = 1
-				self.mode = 1
-			end
+			refreshFrame:OnEvent()
 		else
 			self:Hide()
 			Postal_OpenAll:OpenAll(true)
 		end
 	end
 end)
+function refreshFrame:OnEvent(event)
+	local current, total = GetInboxNumItems()
+	if current == MAX_MAIL_SHOWN or current == total then
+		-- If we're here, then mailbox contains a full fresh batch or
+		-- we're showing all the mail we have. Continue OpenAll in
+		-- 3 seconds to allow for other addons to do stuff.
+		self.time = 3
+		self.mode = 1
+		self:UnregisterEvent("MAIL_INBOX_UPDATE")
+	end
+end
+refreshFrame:SetScript("OnEvent", refreshFrame.OnEvent)
 
 function Postal_OpenAll:OnEnable()
 	if not button then
@@ -75,7 +83,7 @@ function Postal_OpenAll:OnEnable()
 		button:SetWidth(120)
 		button:SetHeight(25)
 		if GetLocale() == "frFR" then
-			button:SetPoint("CENTER", InboxFrame, "TOP", -32, -410)
+			button:SetPoint("CENTER", InboxFrame, "TOP", -46, -399)
 		else
 			button:SetPoint("CENTER", InboxFrame, "TOP", -22, -410)
 		end
@@ -124,9 +132,8 @@ end
 
 function Postal_OpenAll:OpenAll(isRecursive)
 	refreshFrame:Hide()
-	-- Get mail counts
-	origNumItems, origTotalItems = GetInboxNumItems()
-	mailIndex = origNumItems
+	mailIndex, numUnshownItems = GetInboxNumItems()
+	numUnshownItems = numUnshownItems - mailIndex
 	attachIndex = ATTACHMENTS_MAX_RECEIVE
 	invFull = nil
 	invAlmostFull = nil
@@ -139,6 +146,7 @@ function Postal_OpenAll:OpenAll(isRecursive)
 	if mailIndex == 0 then
 		return
 	end
+	firstMailDaysLeft = select(7, GetInboxHeaderInfo(1))
 
 	Postal:DisableInbox(1)
 	button:SetText(L["In Progress"])
@@ -148,6 +156,18 @@ function Postal_OpenAll:OpenAll(isRecursive)
 end
 
 function Postal_OpenAll:ProcessNext()
+	-- We need this because MAIL_INBOX_UPDATEs can now potentially
+	-- include mailbox refreshes since patch 4.0.3 (that is mail can
+	-- get inserted both at the back (old mail) and at the front
+	-- (new mail received in the last 60 seconds))
+	local currentFirstMailDaysLeft = select(7, GetInboxHeaderInfo(1))
+	if currentFirstMailDaysLeft ~= 0 and currentFirstMailDaysLeft ~= firstMailDaysLeft then
+		-- First mail's daysLeft changed, indicating we have a 
+		-- fresh MAIL_INBOX_UPDATE that has new data from CheckInbox()
+		-- so we reopen from the last mail
+		return self:OpenAll(true) -- tail call
+	end
+
 	if mailIndex > 0 then
 		-- Check if we need to wait for the mailbox to change
 		if wait then
@@ -177,6 +197,7 @@ function Postal_OpenAll:ProcessNext()
 		end
 
 		local sender, msgSubject, msgMoney, msgCOD, _, msgItem, _, _, msgText, _, isGM = select(3, GetInboxHeaderInfo(mailIndex))
+		local msgMoneyPending = 0
 
 		-- Skip mail if it contains a CoD or if its from a GM
 		if (msgCOD and msgCOD > 0) or (isGM) then
@@ -196,11 +217,6 @@ function Postal_OpenAll:ProcessNext()
 				return self:ProcessNext() -- tail call
 			end
 		else
-			-- AH mail, check if its from faction or neutral AH
-			local factionEnglish, factionLocale = UnitFactionGroup("player")
-			if not strfind(sender, factionLocale) then
-				mailType = "Neutral"..mailType
-			end
 			-- Skip AH mail types according to user options
 			if not (openAllOverride or Postal.db.profile.OpenAll[mailType]) then
 				mailIndex = mailIndex - 1
@@ -213,7 +229,18 @@ function Postal_OpenAll:ProcessNext()
 		if Postal.db.profile.OpenAll.SpamChat and attachIndex == ATTACHMENTS_MAX_RECEIVE then
 			if not invFull or msgMoney > 0 then
 				local moneyString = msgMoney > 0 and " ["..Postal:GetMoneyString(msgMoney).."]" or ""
-				Postal:Print(format("%s %d: %s%s", L["Processing Message"], mailIndex, msgSubject or "", moneyString))
+				if (mailType == "AHPending") then
+					local amount, deposit, deduction = select(5,GetInboxInvoiceInfo(mailIndex))
+					local msgMoneyPending = amount + deposit - deduction
+					moneyString = msgMoneyPending > 0 and " ["..Postal:GetMoneyString(msgMoneyPending).."]" or moneyString
+				end
+				local playerName
+				if (mailType == "AHSuccess" or mailType == "AHWon" or mailType == "AHPending") then
+					playerName = select(3,GetInboxInvoiceInfo(mailIndex))
+					playerName = playerName and (" ("..playerName..")")
+				end
+				local color = mailType == "AHPending" and "FFFF00" or (mailType == "AHSuccess" or mailType == "AHWon") and "00FF00" or "FFFFFF"
+				Postal:Print(format("\124cFF%s%s %d: %s\124r%s%s", color, L["Processing Message"], mailIndex, msgSubject or "", moneyString, (playerName or "")).."")
 			end
 		end
 
@@ -267,9 +294,9 @@ function Postal_OpenAll:ProcessNext()
 		if attachIndex > 0 and (lootFlag or not invFull) then
 			-- If there's attachments, take the item
 			--Postal:Print("Getting Item from Message "..mailIndex..", "..attachIndex)
+			lastNumAttach, lastNumGold = Postal:CountItemsAndMoney()
 			TakeInboxItem(mailIndex, attachIndex)
 
-			lastNumAttach, lastNumGold = Postal:CountItemsAndMoney()
 			wait = true
 			-- Find next attachment index backwards
 			local attachIndex2 = attachIndex - 1
@@ -282,35 +309,41 @@ function Postal_OpenAll:ProcessNext()
 		elseif msgMoney > 0 then
 			-- No attachments, but there is money
 			--Postal:Print("Getting Gold from Message "..mailIndex)
+			lastNumAttach, lastNumGold = Postal:CountItemsAndMoney()
 			TakeInboxMoney(mailIndex)
 
-			lastNumAttach, lastNumGold = Postal:CountItemsAndMoney()
 			wait = true
 
 			updateFrame.lootingMoney = true
 			updateFrame:Show()
 		else
 			-- Mail has no item or money, go to next mail
-			mailIndex = mailIndex - 1
-			attachIndex = ATTACHMENTS_MAX_RECEIVE
-			return self:ProcessNext() -- tail call
+			-- Ascension fix. Remove "Sale Pending" mail
+			if msgSubject ~= nil and strfind(msgSubject, "Sale Pending:") then
+				DeleteInboxItem(mailIndex)
+				wait = true
+				updateFrame:Show()
+			else
+				mailIndex = mailIndex - 1
+				attachIndex = ATTACHMENTS_MAX_RECEIVE
+				return self:ProcessNext() -- tail call
+			end
 		end
-
 	else
 		-- Reached the end of opening all selected mail
 
-		-- If the numbers are different from previously
 		local numItems, totalItems = GetInboxNumItems()
-		if origNumItems ~= numItems or origTotalItems ~= totalItems then
+		if numUnshownItems ~= totalItems - numItems then
+			-- We will Open All again if the number of unshown items is different
+			return self:OpenAll(true) -- tail call
+		elseif totalItems > numItems and numItems < MAX_MAIL_SHOWN then
 			-- We only want to refresh if there's more items to show
-			if (totalItems > numItems and numItems < 50) or (origTotalItems > origNumItems) then
-				Postal:Print(L["Not all messages are shown, refreshing mailbox soon to continue Open All..."])
-				refreshFrame:Show()
-				return
-			end
+			Postal:Print(L["Not all messages are shown, refreshing mailbox soon to continue Open All..."])
+			refreshFrame:Show()
+			return
 		end
 
-		if IsAddOnLoaded("MrPlow") then
+		if IsAddOnLoaded("MrPlow") and Postal.db.profile.OpenAll.UseMrPlow then
 			if MrPlow.DoStuff then
 				MrPlow:DoStuff("stack")
 			elseif MrPlow.ParseInventory then -- Backwards compat
@@ -362,12 +395,8 @@ function Postal_OpenAll.ModuleMenu(self, level)
 		info.func = self.UncheckHack
 		info.notCheckable = 1
 
-		info.text = FACTION.." "..L["AH-related mail"]
+		info.text = L["AH-related mail"]
 		info.value = "AHMail"
-		UIDropDownMenu_AddButton(info, level)
-
-		info.text = FACTION_STANDING_LABEL4.." "..L["AH-related mail"]
-		info.value = "NeutralAHMail"
 		UIDropDownMenu_AddButton(info, level)
 
 		info.text = L["Non-AH related mail"]
@@ -410,30 +439,9 @@ function Postal_OpenAll.ModuleMenu(self, level)
 			info.checked = db.AHWon
 			UIDropDownMenu_AddButton(info, level)
 
-		elseif UIDROPDOWNMENU_MENU_VALUE == "NeutralAHMail" then
-			info.text = L["Open all Auction cancelled mail"]
-			info.arg2 = "NeutralAHCancelled"
-			info.checked = db.NeutralAHCancelled
-			UIDropDownMenu_AddButton(info, level)
-
-			info.text = L["Open all Auction expired mail"]
-			info.arg2 = "NeutralAHExpired"
-			info.checked = db.NeutralAHExpired
-			UIDropDownMenu_AddButton(info, level)
-
-			info.text = L["Open all Outbid on mail"]
-			info.arg2 = "NeutralAHOutbid"
-			info.checked = db.NeutralAHOutbid
-			UIDropDownMenu_AddButton(info, level)
-
-			info.text = L["Open all Auction successful mail"]
-			info.arg2 = "NeutralAHSuccess"
-			info.checked = db.NeutralAHSuccess
-			UIDropDownMenu_AddButton(info, level)
-
-			info.text = L["Open all Auction won mail"]
-			info.arg2 = "NeutralAHWon"
-			info.checked = db.NeutralAHWon
+			info.text = L["Open all Auction Pending mail"]
+			info.arg2 = "AHPending"
+			info.checked = db.AHPending
 			UIDropDownMenu_AddButton(info, level)
 
 		elseif UIDROPDOWNMENU_MENU_VALUE == "NonAHMail" then
@@ -458,6 +466,16 @@ function Postal_OpenAll.ModuleMenu(self, level)
 			info.arg2 = "SpamChat"
 			info.checked = db.SpamChat
 			UIDropDownMenu_AddButton(info, level)
+			
+			if IsAddOnLoaded("MrPlow") then
+				info.text = L["Use Mr.Plow after opening"]
+				info.hasArrow = nil
+				info.value = nil
+				info.func = Postal.SaveOption
+				info.arg2 = "UseMrPlow"
+				info.checked = db.UseMrPlow
+				UIDropDownMenu_AddButton(info, level)
+			end
 		end
 
 	elseif level == 3 + self.levelAdjust then
