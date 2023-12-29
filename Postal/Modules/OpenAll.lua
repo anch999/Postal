@@ -54,7 +54,7 @@ refreshFrame:SetScript("OnUpdate", function(self, elapsed)
 	if self.time <= 0 then
 		if self.mode == nil then
 			self.time = 1
-			Postal:Print(L["Refreshing mailbox..."])
+			--Postal:Print(L["Refreshing mailbox..."])
 			self:RegisterEvent("MAIL_INBOX_UPDATE")
 			CheckInbox()
 			refreshFrame:OnEvent()
@@ -66,7 +66,7 @@ refreshFrame:SetScript("OnUpdate", function(self, elapsed)
 end)
 function refreshFrame:OnEvent(event)
 	local current, total = GetInboxNumItems()
-	if current == MAX_MAIL_SHOWN or current == total then
+	if current == total then
 		-- If we're here, then mailbox contains a full fresh batch or
 		-- we're showing all the mail we have. Continue OpenAll in
 		-- 3 seconds to allow for other addons to do stuff.
@@ -152,6 +152,7 @@ function Postal_OpenAll:OpenAll(isRecursive)
 	button:SetText(L["In Progress"])
 
 	self:RegisterEvent("UI_ERROR_MESSAGE")
+	MailFrame:UnregisterEvent("MAIL_INBOX_UPDATE")
 	self:ProcessNext()
 end
 
@@ -338,7 +339,7 @@ function Postal_OpenAll:ProcessNext()
 			return self:OpenAll(true) -- tail call
 		elseif totalItems > numItems and numItems < MAX_MAIL_SHOWN then
 			-- We only want to refresh if there's more items to show
-			Postal:Print(L["Not all messages are shown, refreshing mailbox soon to continue Open All..."])
+			Postal:Print(L["Refreshing mailbox..."])
 			refreshFrame:Show()
 			return
 		end
@@ -359,6 +360,7 @@ function Postal_OpenAll:Reset(event)
 	refreshFrame:Hide()
 	updateFrame:Hide()
 	self:UnregisterEvent("UI_ERROR_MESSAGE")
+	MailFrame:RegisterEvent("MAIL_INBOX_UPDATE")
 	button:SetText(L["Open All"])
 	Postal:DisableInbox()
 	InboxFrame_Update()
