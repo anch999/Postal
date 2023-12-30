@@ -66,7 +66,7 @@ refreshFrame:SetScript("OnUpdate", function(self, elapsed)
 end)
 function refreshFrame:OnEvent(event)
 	local current, total = GetInboxNumItems()
-	if current == total then
+	if current == MAX_MAIL_SHOWN or current == total then
 		-- If we're here, then mailbox contains a full fresh batch or
 		-- we're showing all the mail we have. Continue OpenAll in
 		-- 3 seconds to allow for other addons to do stuff.
