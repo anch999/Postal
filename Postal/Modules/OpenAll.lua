@@ -70,6 +70,7 @@ function refreshFrame:OnEvent(event)
 		-- If we're here, then mailbox contains a full fresh batch or
 		-- we're showing all the mail we have. Continue OpenAll in
 		-- 3 seconds to allow for other addons to do stuff.
+		InboxFrame_Update()
 		self.time = 3
 		self.mode = 1
 		self:UnregisterEvent("MAIL_INBOX_UPDATE")
@@ -168,7 +169,6 @@ function Postal_OpenAll:ProcessNext()
 		-- so we reopen from the last mail
 		return self:OpenAll(true) -- tail call
 	end
-
 	if mailIndex > 0 then
 		-- Check if we need to wait for the mailbox to change
 		if wait then
